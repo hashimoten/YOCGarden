@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+    .text-shadow {
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
+    }
+}
+
+/* Custom Animations */
+@keyframes snow {
+    0% {
+        transform: translateY(-10px) translateX(0);
+    }
+    100% {
+        transform: translateY(100vh) translateX(15px);
+    }
+}
+
+.snow-particle {
+    position: absolute;
+    background: white;
+    border-radius: 50%;
+    pointer-events: none;
+    animation: snow linear infinite;
+}
