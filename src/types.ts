@@ -7,6 +7,7 @@ export interface Stock {
     shares: number; // Added
     avgPrice: number; // Added
     currentPrice: number; // Added
+    dividendHistory: { year: number; amount: number }[]; // Added
     // Optional/Legacy fields
     level?: string;
     color?: string;

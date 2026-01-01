@@ -1,18 +1,30 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
     Search,
-    Hash,
     PlusCircle,
     TreePine,
     Coins,
     BadgeJapaneseYen,
     X,
-    Sparkles
+    Sparkles,
+    Loader2
 } from 'lucide-react';
+import { supabase } from '../../lib/supabase';
+import { STOCK_LIST, StockOption } from '../../data/stockList';
+import { getTreeLevel } from '../../utils/treeLevel';
 
 interface AddStockFormProps {
     onClose: () => void;
-    onAdd: (stock: { symbol: string; name: string; quantity: number; avgPrice: number }) => void;
+    onAdd: (stock: {
+        id: string; // Added id to the stock object
+        symbol: string;
+        name: string;
+        quantity: number;
+        avgPrice: number;
+        yoc: number;
+        dividendPerShare: number;
+        dividendHistory: { year: number; amount: number }[];
+    }) => void;
 }
 
 export const AddStockForm: React.FC<AddStockFormProps> = ({ onClose, onAdd }) => {
@@ -22,42 +34,170 @@ export const AddStockForm: React.FC<AddStockFormProps> = ({ onClose, onAdd }) =>
         shares: '',
         price: ''
     });
+    // Unified search input text
+    const [searchText, setSearchText] = useState('');
+
     const [estimatedYoc, setEstimatedYoc] = useState(0);
+    const [annualDividend, setAnnualDividend] = useState(0);
+    const [dividendHistory, setDividendHistory] = useState<{ year: number; amount: number }[]>([]);
     const [isVisible, setIsVisible] = useState(false);
+
+    // Auto-complete states
+    const [suggestions, setSuggestions] = useState<StockOption[]>([]);
+    const [showSuggestions, setShowSuggestions] = useState(false);
+    const suggestionRef = useRef<HTMLDivElement>(null);
+
+    // Fetching state
+    const [isFetching, setIsFetching] = useState(false);
+    const [fetchError, setFetchError] = useState('');
 
     useEffect(() => {
         setIsVisible(true);
+
+        // Handle clicking outside suggestions
+        const handleClickOutside = (event: MouseEvent) => {
+            if (suggestionRef.current && !suggestionRef.current.contains(event.target as Node)) {
+                setShowSuggestions(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
-    // 擬似的な利回り計算 (Mock YOC Calculation)
+    // YOC Calculation based on fetched data
     useEffect(() => {
         const price = Number(formData.price);
-        if (price > 0) {
-            const mockDividend = 200; // 仮の配当金 (Mock Dividend)
-            const yoc = (mockDividend / price) * 100;
+        if (price > 0 && annualDividend > 0) {
+            const yoc = (annualDividend / price) * 100;
             setEstimatedYoc(Number(yoc.toFixed(2)));
         } else {
             setEstimatedYoc(0);
         }
-    }, [formData.price]);
+    }, [formData.price, annualDividend]);
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const { name, value } = e.target;
-        setFormData(prev => ({ ...prev, [name]: value }));
+        if (name === 'search') {
+            setSearchText(value);
+            setShowSuggestions(true);
+
+            // Clear selected stock if user types again
+            if (formData.code) {
+                setFormData(prev => ({ ...prev, code: '', name: '' }));
+                setAnnualDividend(0);
+                setFetchError('');
+            }
+
+            if (value.length > 0) {
+                // Filter by Code OR Name (limit 5)
+                const matches = STOCK_LIST.filter(s =>
+                    s.code.startsWith(value) || s.name.includes(value)
+                ).slice(0, 5);
+                setSuggestions(matches);
+            } else {
+                setSuggestions([]);
+            }
+        } else {
+            setFormData(prev => ({ ...prev, [name]: value }));
+        }
+    };
+
+    const fetchStockData = async (code: string) => {
+        setIsFetching(true);
+        setFetchError('');
+        try {
+            const response = await fetch(`http://localhost:5000/api/stock/${code}`);
+            if (!response.ok) {
+                throw new Error('データの取得に失敗しました');
+            }
+            const data = await response.json();
+
+            // Set annual dividend for YOC calculation
+            setAnnualDividend(data.annual_dividend || 0);
+            setDividendHistory(data.dividend_history || []);
+
+            // Optionally set current price as default avg price if empty
+            if (!formData.price && data.current_price) {
+                setFormData(prev => ({ ...prev, price: Math.floor(data.current_price).toString() }));
+            }
+
+        } catch (error) {
+            console.error('Fetch error:', error);
+            setFetchError('データ取得エラー');
+        } finally {
+            setIsFetching(false);
+        }
+    };
+
+    const handleSelectSuggestion = (stock: StockOption) => {
+        setFormData(prev => ({
+            ...prev,
+            code: stock.code,
+            name: stock.name
+        }));
+        setSearchText(`${stock.code} ${stock.name}`);
+        setSuggestions([]);
+        setShowSuggestions(false);
+
+        // Fetch real data
+        fetchStockData(stock.code);
     };
 
     const isFormValid = formData.code && formData.name && formData.shares && formData.price;
 
-    const handleSubmit = () => {
+    const handleSubmit = async () => {
         if (!isFormValid) return;
 
-        onAdd({
-            symbol: formData.code,
-            name: formData.name,
-            quantity: Number(formData.shares),
-            avgPrice: Number(formData.price),
-        });
-        onClose();
+        try {
+            // 1. Insert into stocks table
+            const { data: stockData, error: stockError } = await supabase
+                .from('stocks')
+                .insert([{
+                    symbol: formData.code,
+                    name: formData.name,
+                    shares: Number(formData.shares),
+                    avg_price: Number(formData.price),
+                    yoc: estimatedYoc,
+                    dividend: Math.floor(Number(formData.shares) * annualDividend),
+                    current_price: Number(formData.price) // Assume current price ~ avg price for now or fetched price
+                }])
+                .select()
+                .single();
+
+            if (stockError) throw stockError;
+
+            // 2. Insert dividend history
+            if (dividendHistory.length > 0 && stockData) {
+                const historyRecords = dividendHistory.map(h => ({
+                    stock_id: stockData.id,
+                    year: h.year,
+                    amount: h.amount
+                }));
+                const { error: historyError } = await supabase
+                    .from('dividend_history')
+                    .insert(historyRecords);
+
+                if (historyError) throw historyError;
+            }
+
+            // 3. Update UI
+            onAdd({
+                id: stockData.id,
+                symbol: formData.code,
+                name: formData.name,
+                quantity: Number(formData.shares),
+                avgPrice: Number(formData.price),
+                yoc: estimatedYoc,
+                dividendPerShare: annualDividend,
+                dividendHistory: dividendHistory
+            });
+            onClose();
+
+        } catch (error) {
+            console.error('Error saving stock:', error);
+            // Handle error (show toast?)
+            alert('保存に失敗しました');
+        }
     };
 
     return (
@@ -113,12 +253,30 @@ export const AddStockForm: React.FC<AddStockFormProps> = ({ onClose, onAdd }) =>
                         </div>
 
                         {/* Live Preview Section */}
-                        <div className="flex items-center gap-6 mb-10 p-5 bg-emerald-50/50 rounded-[2rem] border border-emerald-100/50">
-                            <div className="relative w-20 h-20 bg-white rounded-2xl flex items-center justify-center shadow-sm border border-emerald-50">
-                                <TreePine
-                                    size={isFormValid ? 48 : 32}
-                                    className={`${isFormValid ? 'text-emerald-500' : 'text-slate-200'} transition-all duration-700`}
-                                />
+                        <div className="flex items-center gap-6 mb-10 p-5 bg-emerald-50/50 rounded-[2rem] border border-emerald-100/50 relative overflow-hidden">
+                            {/* Loading Overlay */}
+                            {isFetching && (
+                                <div className="absolute inset-0 bg-white/60 backdrop-blur-[1px] flex items-center justify-center z-10 rounded-[2rem]">
+                                    <Loader2 className="animate-spin text-emerald-500" size={24} />
+                                </div>
+                            )}
+
+                            <div className="relative w-20 h-20 bg-white rounded-2xl flex items-center justify-center shadow-sm border border-emerald-50 overflow-hidden">
+                                {isFormValid ? (
+                                    <div className="flex flex-col items-center justify-center w-full h-full p-2">
+                                        <img
+                                            src={getTreeLevel(estimatedYoc).image}
+                                            alt="Tree Preview"
+                                            className="w-full h-full object-contain filter drop-shadow-sm mb-1"
+                                        />
+                                    </div>
+                                ) : (
+                                    <TreePine
+                                        size={32}
+                                        className="text-slate-200 transition-all duration-700"
+                                    />
+                                )}
+
                                 {isFormValid && (
                                     <div className="absolute -top-1 -right-1">
                                         <Sparkles className="text-amber-400 animate-pulse" size={20} />
@@ -126,46 +284,77 @@ export const AddStockForm: React.FC<AddStockFormProps> = ({ onClose, onAdd }) =>
                                 )}
                             </div>
                             <div>
-                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Estimated YOC</p>
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                                    {isFormValid ? getTreeLevel(estimatedYoc).englishLabel : 'Estimated YOC'}
+                                </p>
                                 <div className="flex items-baseline gap-1">
                                     <span className={`text-3xl font-black transition-colors ${estimatedYoc > 0 ? 'text-emerald-600' : 'text-slate-300'}`}>
                                         {estimatedYoc}
                                     </span>
                                     <span className="text-sm font-bold text-slate-400">%</span>
                                 </div>
+                                {isFormValid && (
+                                    <p className="text-[10px] font-bold text-emerald-600/80 mt-1">
+                                        {getTreeLevel(estimatedYoc).label}
+                                    </p>
+                                )}
+                                {annualDividend > 0 && (
+                                    <p className="text-[10px] text-emerald-600/70 font-medium">
+                                        Est. Div: ¥{annualDividend.toLocaleString()}
+                                    </p>
+                                )}
+                                {fetchError && (
+                                    <p className="text-[10px] text-red-500 font-bold mt-1">
+                                        {fetchError}
+                                    </p>
+                                )}
                             </div>
                         </div>
 
                         {/* Form Fields */}
                         <div className="space-y-5">
-                            <div className="grid grid-cols-1 gap-4">
-                                <div className="relative">
-                                    <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-slate-300">
-                                        <Hash size={18} />
-                                    </div>
-                                    <input
-                                        type="text"
-                                        name="code"
-                                        value={formData.code}
-                                        onChange={handleChange}
-                                        placeholder="銘柄コード (例: 2914)"
-                                        className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-12 pr-4 focus:bg-white focus:border-emerald-500/50 focus:ring-4 focus:ring-emerald-500/5 outline-none transition-all placeholder:text-slate-300 text-slate-700 font-bold text-sm"
-                                    />
+                            {/* Unified Search Field */}
+                            <div className="relative" ref={suggestionRef}>
+                                <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-slate-300">
+                                    <Search size={18} />
                                 </div>
+                                <input
+                                    type="text"
+                                    name="search"
+                                    value={searchText}
+                                    onChange={handleChange}
+                                    onFocus={() => {
+                                        if (searchText.length > 0) setShowSuggestions(true);
+                                    }}
+                                    placeholder="コード または 銘柄名で検索"
+                                    autoComplete="off"
+                                    className={`w-full bg-slate-50 border rounded-2xl py-4 pl-12 pr-4 outline-none transition-all placeholder:text-slate-300 text-slate-700 font-bold text-sm
+                                        ${formData.code ? 'border-emerald-500/50 bg-emerald-50/10' : 'border-slate-100 focus:bg-white focus:border-emerald-500/50 focus:ring-4 focus:ring-emerald-500/5'}
+                                    `}
+                                />
+                                {formData.code && (
+                                    <div className="absolute right-4 top-1/2 -translate-y-1/2">
+                                        <div className="bg-emerald-100 text-emerald-600 text-[10px] font-bold px-2 py-1 rounded-full">
+                                            SELECTED
+                                        </div>
+                                    </div>
+                                )}
 
-                                <div className="relative">
-                                    <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-slate-300">
-                                        <Search size={18} />
+                                {/* Suggestions Dropdown */}
+                                {showSuggestions && suggestions.length > 0 && (
+                                    <div className="absolute top-full left-0 w-full mt-2 bg-white border border-emerald-100 rounded-2xl shadow-xl z-50 overflow-hidden max-h-60 overflow-y-auto">
+                                        {suggestions.map((stock) => (
+                                            <button
+                                                key={stock.code}
+                                                onClick={() => handleSelectSuggestion(stock)}
+                                                className="w-full text-left px-4 py-3 hover:bg-emerald-50 flex justify-between items-center transition-colors border-b border-slate-50 last:border-none"
+                                            >
+                                                <span className="font-bold text-emerald-600 text-xs">{stock.code}</span>
+                                                <span className="text-slate-600 text-xs truncate max-w-[70%]">{stock.name}</span>
+                                            </button>
+                                        ))}
                                     </div>
-                                    <input
-                                        type="text"
-                                        name="name"
-                                        value={formData.name}
-                                        onChange={handleChange}
-                                        placeholder="銘柄名 (例: 日本たばこ産業)"
-                                        className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-12 pr-4 focus:bg-white focus:border-emerald-500/50 focus:ring-4 focus:ring-emerald-500/5 outline-none transition-all placeholder:text-slate-300 text-slate-700 font-bold text-sm"
-                                    />
-                                </div>
+                                )}
                             </div>
 
                             <div className="grid grid-cols-2 gap-4">

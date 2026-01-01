@@ -8,24 +8,69 @@ import { STOCKS as INITIAL_STOCKS } from './data/mockData';
 import { AddStockForm } from './components/add/AddStockForm';
 import { Stock } from './types';
 
+import { supabase } from './lib/supabase';
+
 function App() {
     const [activeTab, setActiveTab] = useState('garden');
     const [isLoaded, setIsLoaded] = useState(false);
     const [showAddForm, setShowAddForm] = useState(false);
-    const [stocks, setStocks] = useState<Stock[]>(INITIAL_STOCKS);
+    // Start with empty or mock? Plan says use fetched data. Let's start with empty.
+    const [stocks, setStocks] = useState<Stock[]>([]);
 
     useEffect(() => {
-        setIsLoaded(true);
+        const fetchStocks = async () => {
+            const { data, error } = await supabase
+                .from('stocks')
+                .select('*, dividend_history(*)');
+
+            if (error) {
+                console.error('Error fetching stocks:', error);
+                // Fallback to mock data if fetch fails (e.g. no connection)
+                setStocks(INITIAL_STOCKS);
+            } else if (data) {
+                const mappedStocks: Stock[] = data.map((s: any) => ({
+                    id: s.id,
+                    symbol: s.symbol,
+                    name: s.name,
+                    // Parse numeric types as they might come as strings from DB or numbers
+                    shares: Number(s.shares),
+                    avgPrice: Number(s.avg_price),
+                    yoc: Number(s.yoc),
+                    dividend: Number(s.dividend),
+                    currentPrice: Number(s.current_price || s.avg_price), // Fallback
+                    dividendHistory: (s.dividend_history || []).map((h: any) => ({
+                        year: h.year,
+                        amount: Number(h.amount)
+                    })),
+                    // Legacy/UI fields (calculate or default)
+                    level: '若木', // Determine level logic here if needed
+                    color: '#34d399' // Assign random or specific color
+                }));
+                setStocks(mappedStocks);
+            }
+            setIsLoaded(true);
+        };
+
+        fetchStocks();
     }, []);
 
-    const handleAddStock = (newStockData: { symbol: string; name: string; quantity: number; avgPrice: number }) => {
-        // Basic calculation logic (simplified for now)
-        const currentPrice = newStockData.avgPrice * 1.05; // Assume 5% gain for demo
-        const yoc = parseFloat(((Math.random() * 3) + 2).toFixed(1)); // Random YOC 2-5%
-        const dividend = Math.floor(newStockData.quantity * newStockData.avgPrice * (yoc / 100));
+    const handleAddStock = (newStockData: {
+        id: string; // Added id
+        symbol: string;
+        name: string;
+        quantity: number;
+        avgPrice: number;
+        yoc: number;
+        dividendPerShare: number;
+        dividendHistory: { year: number; amount: number }[];
+    }) => {
+        // Use real values
+        const currentPrice = newStockData.avgPrice; // Simplified
+        const yoc = newStockData.yoc;
+        const dividend = Math.floor(newStockData.quantity * newStockData.dividendPerShare);
 
         const newStock: Stock = {
-            id: String(Date.now()),
+            id: newStockData.id, // Use passed id
             symbol: newStockData.symbol,
             name: newStockData.name,
             yoc: yoc,
@@ -33,6 +78,7 @@ function App() {
             shares: newStockData.quantity,
             avgPrice: newStockData.avgPrice,
             currentPrice: currentPrice,
+            dividendHistory: newStockData.dividendHistory
         };
 
         setStocks([...stocks, newStock]);

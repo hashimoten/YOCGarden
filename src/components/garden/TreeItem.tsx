@@ -1,6 +1,5 @@
-import React from 'react';
-import { TreePine } from 'lucide-react';
 import { Stock } from '../../types';
+import { getTreeLevel } from '../../utils/treeLevel';
 
 interface TreeItemProps {
     stock: Stock;
@@ -10,6 +9,14 @@ interface TreeItemProps {
 }
 
 export const TreeItem: React.FC<TreeItemProps> = ({ stock, isSelected, onClick, style }) => {
+    const levelInfo = getTreeLevel(stock.yoc);
+
+    // Base size calculation logic - we can keep generic scaling or just fixed sizes?
+    // User mentioned "only size differs" before.
+    // Let's keep the scaling logic but apply to the image container.
+    // Base size 40px + some scaling.
+    const size = 40 + (stock.yoc * 4);
+
     return (
         <button
             onClick={() => onClick(stock)}
@@ -17,16 +24,20 @@ export const TreeItem: React.FC<TreeItemProps> = ({ stock, isSelected, onClick, 
             ${isSelected ? 'z-30' : 'z-10'} relative`}
             style={style}
         >
-            <div className="relative">
-                {/* Tree visual height based on YOC */}
-                <TreePine
-                    size={20 + (stock.yoc * 6)}
-                    className={`${isSelected ? 'text-white' : 'text-emerald-500/80'} transition-colors filter drop-shadow-md`}
-                    style={{ opacity: 0.7 + (stock.yoc / 20) }}
+            <div
+                className="relative flex items-center justify-center transition-all duration-500"
+                style={{
+                    width: `${size}px`,
+                    height: `${size}px`
+                }}
+            >
+                <img
+                    src={levelInfo.image}
+                    alt={stock.name}
+                    className={`w-full h-full object-contain filter drop-shadow-md transition-all duration-500
+                        ${isSelected ? 'brightness-110 drop-shadow-xl' : 'opacity-90'}
+                    `}
                 />
-                {stock.yoc > 5 && (
-                    <div className="absolute -top-1 -right-1 w-2 h-2 bg-red-400 rounded-full animate-pulse shadow-sm" />
-                )}
             </div>
             {isSelected && (
                 <div
