@@ -12,8 +12,9 @@ import {
 import { supabase } from '../../lib/supabase';
 import { STOCK_LIST, StockOption } from '../../data/stockList';
 import { getTreeLevel } from '../../utils/treeLevel';
+import { MonthPicker } from '../ui/MonthPicker'; // Added
 
-interface AddStockFormProps {
+export interface AddStockFormProps {
     onClose: () => void;
     onAdd: (stock: {
         id: string; // Added id to the stock object
@@ -23,7 +24,9 @@ interface AddStockFormProps {
         avgPrice: number;
         yoc: number;
         dividendPerShare: number;
-        dividendHistory: { year: number; amount: number }[];
+        acquisitionDate: string;
+        sector?: string;
+        dividendHistory: any[];
     }) => void;
 }
 
@@ -32,15 +35,17 @@ export const AddStockForm: React.FC<AddStockFormProps> = ({ onClose, onAdd }) =>
         code: '',
         name: '',
         shares: '',
-        price: ''
+        price: '',
+        acquisitionDate: new Date().toISOString().split('T')[0] // Default to today
     });
     // Unified search input text
     const [searchText, setSearchText] = useState('');
 
     const [estimatedYoc, setEstimatedYoc] = useState(0);
     const [annualDividend, setAnnualDividend] = useState(0);
-    const [dividendHistory, setDividendHistory] = useState<{ year: number; amount: number }[]>([]);
+    const [dividendHistory, setDividendHistory] = useState<any[]>([]);
     const [isVisible, setIsVisible] = useState(false);
+    const [fetchedMetadata, setFetchedMetadata] = useState<{ sector?: string }>({});
 
     // Auto-complete states
     const [suggestions, setSuggestions] = useState<StockOption[]>([]);
@@ -86,6 +91,7 @@ export const AddStockForm: React.FC<AddStockFormProps> = ({ onClose, onAdd }) =>
                 setFormData(prev => ({ ...prev, code: '', name: '' }));
                 setAnnualDividend(0);
                 setFetchError('');
+                setFetchedMetadata({}); // Clear fetched metadata
             }
 
             if (value.length > 0) {
@@ -106,15 +112,17 @@ export const AddStockForm: React.FC<AddStockFormProps> = ({ onClose, onAdd }) =>
         setIsFetching(true);
         setFetchError('');
         try {
-            const response = await fetch(`http://localhost:5000/api/stock/${code}`);
+            const response = await fetch(`http://127.0.0.1:5000/api/stock/${code}`);
             if (!response.ok) {
-                throw new Error('データの取得に失敗しました');
+                const errData = await response.json().catch(() => ({}));
+                throw new Error(errData.error || `Error ${response.status}: データの取得に失敗しました`);
             }
             const data = await response.json();
 
             // Set annual dividend for YOC calculation
             setAnnualDividend(data.annual_dividend || 0);
             setDividendHistory(data.dividend_history || []);
+            setFetchedMetadata({ sector: data.sector });
 
             // Optionally set current price as default avg price if empty
             if (!formData.price && data.current_price) {
@@ -123,7 +131,7 @@ export const AddStockForm: React.FC<AddStockFormProps> = ({ onClose, onAdd }) =>
 
         } catch (error) {
             console.error('Fetch error:', error);
-            setFetchError('データ取得エラー');
+            setFetchError(error instanceof Error ? error.message : 'データ取得エラー');
         } finally {
             setIsFetching(false);
         }
@@ -143,7 +151,7 @@ export const AddStockForm: React.FC<AddStockFormProps> = ({ onClose, onAdd }) =>
         fetchStockData(stock.code);
     };
 
-    const isFormValid = formData.code && formData.name && formData.shares && formData.price;
+    const isFormValid = formData.code && formData.name && formData.shares && formData.price && formData.acquisitionDate;
 
     const handleSubmit = async () => {
         if (!isFormValid) return;
@@ -159,7 +167,9 @@ export const AddStockForm: React.FC<AddStockFormProps> = ({ onClose, onAdd }) =>
                     avg_price: Number(formData.price),
                     yoc: estimatedYoc,
                     dividend: Math.floor(Number(formData.shares) * annualDividend),
-                    current_price: Number(formData.price) // Assume current price ~ avg price for now or fetched price
+                    acquisition_date: formData.acquisitionDate,
+                    current_price: Number(formData.price), // Assume current price ~ avg price for now or fetched price
+                    sector: fetchedMetadata.sector // Insert sector
                 }])
                 .select()
                 .single();
@@ -170,8 +180,12 @@ export const AddStockForm: React.FC<AddStockFormProps> = ({ onClose, onAdd }) =>
             if (dividendHistory.length > 0 && stockData) {
                 const historyRecords = dividendHistory.map(h => ({
                     stock_id: stockData.id,
-                    year: h.year,
-                    amount: h.amount
+                    date_str: h.date_str,
+                    year: parseInt(h.date_str.split('/')[0]), // Derive year to satisfy Not-Null constraint
+                    amount: h.amount,
+                    is_increase: h.is_increase,
+                    change_pct: h.change_pct,
+                    comparison_amount: h.comparison_amount
                 }));
                 const { error: historyError } = await supabase
                     .from('dividend_history')
@@ -189,14 +203,22 @@ export const AddStockForm: React.FC<AddStockFormProps> = ({ onClose, onAdd }) =>
                 avgPrice: Number(formData.price),
                 yoc: estimatedYoc,
                 dividendPerShare: annualDividend,
-                dividendHistory: dividendHistory
+                acquisitionDate: formData.acquisitionDate,
+                sector: fetchedMetadata.sector,
+                dividendHistory: dividendHistory.map(h => ({
+                    dateStr: h.date_str,
+                    amount: h.amount,
+                    comparisonAmount: h.comparison_amount,
+                    isIncrease: h.is_increase,
+                    changePct: h.change_pct
+                }))
             });
             onClose();
 
         } catch (error) {
             console.error('Error saving stock:', error);
             // Handle error (show toast?)
-            alert('保存に失敗しました');
+            alert('保存に失敗しました: ' + (error as any).message);
         }
     };
 
@@ -216,25 +238,27 @@ export const AddStockForm: React.FC<AddStockFormProps> = ({ onClose, onAdd }) =>
                 className={`relative w-[90%] max-w-[400px] transition-all duration-700 ease-out transform ${isVisible ? 'translate-y-0 opacity-100 scale-100' : 'translate-y-12 opacity-0 scale-95'
                     }`}
             >
-                <div className="bg-white/95 backdrop-blur-2xl border border-white/20 rounded-[3rem] shadow-[0_30px_60px_rgba(0,0,0,0.4)] overflow-hidden">
-
-                    {/* Internal Snow Effect */}
-                    <div className="absolute inset-0 pointer-events-none opacity-50">
-                        {[...Array(8)].map((_, i) => (
-                            <div
-                                key={i}
-                                className="absolute text-emerald-200/40 animate-snow"
-                                style={{
-                                    left: `${Math.random() * 100}%`,
-                                    top: `-20px`,
-                                    animationDuration: `${4 + Math.random() * 6}s`,
-                                    animationDelay: `${Math.random() * 2}s`,
-                                    fontSize: `${10 + Math.random() * 10}px`
-                                }}
-                            >
-                                ❄
-                            </div>
-                        ))}
+                <div className="relative bg-transparent">
+                    {/* Background Layer with Clipping for Snow */}
+                    <div className="absolute inset-0 bg-white/95 backdrop-blur-2xl border border-white/20 rounded-[3rem] shadow-[0_30px_60px_rgba(0,0,0,0.4)] overflow-hidden">
+                        {/* Internal Snow Effect */}
+                        <div className="absolute inset-0 pointer-events-none opacity-50">
+                            {[...Array(8)].map((_, i) => (
+                                <div
+                                    key={i}
+                                    className="absolute text-emerald-200/40 animate-snow"
+                                    style={{
+                                        left: `${Math.random() * 100}%`,
+                                        top: `-20px`,
+                                        animationDuration: `${4 + Math.random() * 6}s`,
+                                        animationDelay: `${Math.random() * 2}s`,
+                                        fontSize: `${10 + Math.random() * 10}px`
+                                    }}
+                                >
+                                    ❄
+                                </div>
+                            ))}
+                        </div>
                     </div>
 
                     <div className="relative p-8">
@@ -356,6 +380,12 @@ export const AddStockForm: React.FC<AddStockFormProps> = ({ onClose, onAdd }) =>
                                     </div>
                                 )}
                             </div>
+
+                            {/* Acquisition Date (Month Picker) */}
+                            <MonthPicker
+                                value={formData.acquisitionDate}
+                                onChange={(dateStr) => setFormData(prev => ({ ...prev, acquisitionDate: dateStr }))}
+                            />
 
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="relative">

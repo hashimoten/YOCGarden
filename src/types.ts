@@ -7,7 +7,15 @@ export interface Stock {
     shares: number; // Added
     avgPrice: number; // Added
     currentPrice: number; // Added
-    dividendHistory: { year: number; amount: number }[]; // Added
+    acquisitionDate?: string; // Added: YYYY-MM-DD
+    sector?: string; // Added
+    dividendHistory: {
+        dateStr: string;
+        amount: number;
+        comparisonAmount?: number;
+        isIncrease?: boolean;
+        changePct?: number;
+    }[];
     // Optional/Legacy fields
     level?: string;
     color?: string;
