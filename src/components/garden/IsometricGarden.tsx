@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, Suspense } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { OrthographicCamera, Billboard, Text, useTexture, SoftShadows, Preload } from '@react-three/drei';
+import { OrthographicCamera, Text, useTexture, Preload } from '@react-three/drei';
 import * as THREE from 'three';
 import { Stock } from '../../types';
 import { getTreeLevel } from '../../utils/treeLevel';
@@ -10,16 +10,33 @@ interface IsometricGardenProps {
     onStockClick?: (stock: Stock) => void;
 }
 
-const TILE_SIZE = 1.2;
+const TILE_SIZE = 1.0; // Slightly reduced for tighter packing if using blocks
+// Actually keep 1.2 for spacing, or adjust if the image is square. 
+// Let's assume standard spacing first.
 const GRID_COLS = 5;
 const GRID_ROWS = 5;
 
-// --- Ground Block ---
-const GroundBlock: React.FC<{ position: [number, number, number]; isDark: boolean }> = ({ position, isDark }) => {
+// --- Ground Block Using Texture ---
+const GroundBlock: React.FC<{ position: [number, number, number] }> = ({ position }) => {
+    const texture = useTexture('/trees/block_grass.png');
+
+    // Assuming block_grass.png is an isometric view similar to the trees.
+    // We render it on a plane facing the camera.
     return (
-        <mesh position={[position[0], position[1] + 0.01, position[2]]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-            <planeGeometry args={[1, 1]} />
-            <meshStandardMaterial color={isDark ? "#22c55e" : "#4ade80"} />
+        <mesh
+            position={[position[0], position[1], position[2]]}
+            rotation={[0, Math.PI / 4, 0]} // Face camera like trees
+            receiveShadow
+        >
+            {/* Size might need adjustment based on the image aspect ratio */}
+            <planeGeometry args={[1.8, 1.8]} />
+            <meshBasicMaterial
+                map={texture}
+                transparent={true}
+                side={THREE.DoubleSide}
+                depthWrite={false} // Prevent Z-fighting if overlapping
+                toneMapped={false}
+            />
         </mesh>
     );
 };
@@ -33,43 +50,78 @@ const TreeImage: React.FC<{
     onClick: () => void;
 }> = ({ imagePath, name, yoc, position, onClick }) => {
     const [hovered, setHovered] = useState(false);
-
-    // useTexture from drei
     const texture = useTexture(imagePath);
-
-    // Ensure proper color space for the texture
-    useEffect(() => {
-        if (texture) {
-            texture.colorSpace = THREE.SRGBColorSpace;
-            texture.needsUpdate = true;
-        }
-    }, [texture]);
 
     useEffect(() => {
         document.body.style.cursor = hovered ? 'pointer' : 'auto';
         return () => { document.body.style.cursor = 'auto'; };
     }, [hovered]);
 
+    // Determine custom offset based on image type
+    const getCustomPosition = (): [number, number, number] => {
+        if (imagePath.includes('YoungTree')) {
+            return [0, 0, 0]; // Raise YoungTree slightly or adjust X/Z
+        }
+        if (imagePath.includes('GrowingTree')) {
+            return [0, 0.2, 0]; // Raise YoungTree slightly or adjust X/Z
+        }
+        if (imagePath.includes('CoreHolding')) {
+            return [0, 0.5, 0]; // Raise YoungTree slightly or adjust X/Z
+        }
+        if (imagePath.includes('LegendaryTree')) {
+            // Legendary tree might be large, adjust if needed
+            return [0, 0.25, 0];
+        }
+        return [0, 0.4, 0];
+    };
+
+    // Determine custom scale based on image type
+    const getCustomScale = (): number => {
+        const baseScale = hovered ? 1.3 : 1.1; // Hover effect multiplier
+
+        let visualScale = 1.0;
+        if (imagePath.includes('YoungTree')) {
+            visualScale = 0.8; // Make YoungTree smaller
+        } else if (imagePath.includes('GrowingTree')) {
+            visualScale = 0.8;
+        } else if (imagePath.includes('CoreHolding')) {
+            visualScale = 1.2;
+        } else if (imagePath.includes('LegendaryTree')) {
+            visualScale = 1.2; // Legendary is huge
+        }
+
+        return baseScale * visualScale;
+    };
+
     return (
-        <group
-            position={position}
-            onClick={(e) => { e.stopPropagation(); onClick(); }}
-            onPointerOver={() => setHovered(true)}
-            onPointerOut={() => setHovered(false)}
-        >
-            {/* Shadow blob */}
-            <mesh position={[0, 0.01, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-                <circleGeometry args={[0.3, 32]} />
-                <meshBasicMaterial color="black" transparent opacity={0.2} />
+        <group position={position}>
+            {/* INVISIBLE HIT BOX for interaction - smaller than visual to prevent overlap */}
+            <mesh
+                position={[0, 0.5, 0]}
+                onClick={(e) => {
+                    e.stopPropagation();
+                    onClick();
+                }}
+                onPointerOver={(e) => {
+                    e.stopPropagation();
+                    setHovered(true);
+                }}
+                onPointerOut={(e) => {
+                    e.stopPropagation();
+                    setHovered(false);
+                }}
+                visible={false} // Invisible but interactive
+            >
+                <boxGeometry args={[0.6, 1.0, 0.6]} />
+                <meshBasicMaterial color="red" wireframe />
             </mesh>
 
-
-
-            {/* Tree Texture - Regular mesh instead of Billboard */}
+            {/* Visual Tree Texture - No interaction events here */}
             <mesh
-                position={[0, 0.7, 0]}
-                scale={hovered ? 1.3 : 1.1}
+                position={getCustomPosition()}
+                scale={getCustomScale()}
                 rotation={[0, Math.PI / 4, 0]}
+                renderOrder={10}
             >
                 <planeGeometry args={[1.5, 1.5]} />
                 <meshBasicMaterial
@@ -84,89 +136,84 @@ const TreeImage: React.FC<{
 
             {/* Hover Label */}
             {hovered && (
-                <Billboard position={[0, 1.8, 0]}>
-                    <Text fontSize={0.22} color="#1E293B" anchorX="center" anchorY="middle" outlineWidth={0.03} outlineColor="white">
+                <group position={[0, 1.5, 0]} renderOrder={20}>
+                    <Text fontSize={0.22} color="#1E293B" anchorX="center" anchorY="middle" outlineWidth={0.03} outlineColor="white" rotation={[0, Math.PI / 4, 0]}>
                         {name}
                     </Text>
-                    <Text position={[0, -0.28, 0]} fontSize={0.16} color="#059669" anchorX="center" anchorY="middle" outlineWidth={0.02} outlineColor="white">
+                    <Text position={[0, -0.28, 0]} fontSize={0.16} color="#059669" anchorX="center" anchorY="middle" outlineWidth={0.02} outlineColor="white" rotation={[0, Math.PI / 4, 0]}>
                         {`YOC: ${yoc.toFixed(2)}%`}
                     </Text>
-                </Billboard>
+                </group>
             )}
         </group>
     );
 };
 
-// --- Loading Placeholder ---
-const LoadingPlaceholder: React.FC = () => {
-    return (
-        <mesh position={[0, 0.5, 0]}>
-            <sphereGeometry args={[0.1]} />
-            <meshBasicMaterial color="#cccccc" />
-        </mesh>
-    );
-};
-
-// --- Scene Content (separated for Suspense) ---
+// --- Scene Content ---
 const GardenScene: React.FC<{
     stocks: Stock[];
     gridSpots: Array<{ x: number; z: number; index: number }>;
     onStockClick?: (stock: Stock) => void;
 }> = ({ stocks, gridSpots, onStockClick }) => {
     return (
-        <>
-            {/* Base Island */}
-            <group position={[0, 0.2, 0]}>
-                {/* Large soil block */}
-                <mesh position={[0, -0.4, 0]} receiveShadow>
-                    <boxGeometry args={[GRID_COLS * TILE_SIZE + 0.2, 0.8, GRID_ROWS * TILE_SIZE + 0.2]} />
-                    <meshStandardMaterial color="#5D4037" />
-                </mesh>
-                {/* Grass top layer */}
-                <mesh position={[0, 0.01, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-                    <planeGeometry args={[GRID_COLS * TILE_SIZE, GRID_ROWS * TILE_SIZE]} />
-                    <meshStandardMaterial color="#86EFAC" />
-                </mesh>
-            </group>
+        <group position={[0, -0.5, 0]}> {/* Adjust overall height */}
+            {gridSpots.map((spot) => {
+                const stock = stocks[spot.index];
 
-            {/* Grid Cells */}
-            <group position={[0, 0.25, 0]}>
-                {gridSpots.map((spot) => {
-                    const stock = stocks[spot.index];
-                    const isDark = (spot.index % 2 === ((Math.floor(spot.index / GRID_COLS) % 2) ? 0 : 1));
-                    return (
-                        <group key={spot.index} position={[spot.x, 0, spot.z]}>
-                            <GroundBlock position={[0, 0, 0]} isDark={isDark} />
-                            {stock && (
-                                <Suspense fallback={<LoadingPlaceholder />}>
-                                    <TreeImage
-                                        imagePath={getTreeLevel(stock.yoc).image}
-                                        name={stock.name}
-                                        yoc={stock.yoc}
-                                        position={[0, 0.05, 0]}
-                                        onClick={() => onStockClick && onStockClick(stock)}
-                                    />
-                                </Suspense>
-                            )}
-                        </group>
-                    );
-                })}
-            </group>
-        </>
+                // Calculate position for Z-sorting (painter's algorithm)
+                // In isometric grid, items 'behind' (lower X/Z) should be drawn first?
+                // Or just rely on Z-buffer + alpha test. 
+                // With transparent planes, renderOrder is helpful.
+                // We'll give closer items higher renderOrder if needed, but standard depth might work if cutoff is used.
+                // For now, let's just render.
+
+                return (
+                    <group key={spot.index} position={[spot.x, 0, spot.z]}>
+                        <Suspense fallback={null}>
+                            <GroundBlock position={[0, 0, 0]} />
+                        </Suspense>
+                        {stock && (
+                            <Suspense fallback={null}>
+                                <TreeImage
+                                    imagePath={getTreeLevel(stock.yoc).image}
+                                    name={stock.name}
+                                    yoc={stock.yoc}
+                                    position={[0, 0.5, 0]} // Sit on top of block
+                                    onClick={() => onStockClick && onStockClick(stock)}
+                                />
+                            </Suspense>
+                        )}
+                    </group>
+                );
+            })}
+        </group>
     );
 };
 
 export const IsometricGarden: React.FC<IsometricGardenProps> = ({ stocks, onStockClick }) => {
 
     const gridSpots = useMemo(() => {
+        // Generate grid spots
+        // To ensure correct overlap in isometric view (Painter's Algorithm for sprites),
+        // we might want to sort them: Back (-Z/-X) to Front (+Z/+X)
         const spots = [];
         for (let i = 0; i < 25; i++) {
             const col = i % GRID_COLS;
             const row = Math.floor(i / GRID_COLS);
-            const x = (col - (GRID_COLS - 1) / 2) * TILE_SIZE;
-            const z = (row - (GRID_ROWS - 1) / 2) * TILE_SIZE;
-            spots.push({ x, z, index: i });
+            const x = (col - (GRID_COLS - 1) / 2) * TILE_SIZE * 1.0; // Spacing multiplier
+            const z = (row - (GRID_ROWS - 1) / 2) * TILE_SIZE * 1.0;
+            spots.push({ x, z, index: i, col, row });
         }
+
+        // Sorting for isometric sprite overlap: 
+        // Draw far items first (Low Row/Col?) -> Draw near items last.
+        // In this camera setup, [20,20,20] looking at [0,0,0].
+        // +X and +Z are closer to camera? No, camera is at +20,+20,+20.
+        // So +X/+Z is closer.
+        // Far is -X/-Z.
+        // We should render -X/-Z first. 
+        spots.sort((a, b) => (a.x + a.z) - (b.x + b.z));
+
         return spots;
     }, []);
 
@@ -174,7 +221,6 @@ export const IsometricGarden: React.FC<IsometricGardenProps> = ({ stocks, onStoc
         <div style={{ width: '100%', height: '100%', minHeight: '400px' }}>
             <Canvas
                 className="w-full h-full"
-                shadows
                 gl={{
                     antialias: true,
                     alpha: true,
@@ -183,22 +229,16 @@ export const IsometricGarden: React.FC<IsometricGardenProps> = ({ stocks, onStoc
             >
                 <OrthographicCamera
                     makeDefault
-                    position={[20, 20, 20]}
-                    zoom={45}
+                    position={[20, 20, 20]} // Isometric Angle
+                    zoom={55} // Zoom in to fill space
                     near={0.1}
                     far={1000}
                     onUpdate={c => c.lookAt(0, 0, 0)}
                 />
 
-                {/* Lighting */}
-                <ambientLight intensity={0.8} />
-                <directionalLight
-                    position={[10, 20, 5]}
-                    intensity={1.0}
-                    castShadow
-                    shadow-mapSize={[1024, 1024]}
-                />
-                <SoftShadows size={10} samples={10} focus={0} />
+                <ambientLight intensity={1.0} />
+
+                {/* No base island, just tiles */}
 
                 <Suspense fallback={null}>
                     <GardenScene stocks={stocks} gridSpots={gridSpots} onStockClick={onStockClick} />

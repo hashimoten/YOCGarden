@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { TrendingUp, Award, ChevronRight, DollarSign, Pencil, Trash2, HelpCircle, Sparkles } from 'lucide-react';
+import { TrendingUp, Award, ChevronRight, DollarSign, Pencil, Trash2, HelpCircle, Sparkles, Layers } from 'lucide-react';
 import { Stock } from '../../types';
 
 import { getTreeLevel, TREE_LEVELS, TreeLevelInfo } from '../../utils/treeLevel';
@@ -67,6 +67,12 @@ export const DetailOverlay: React.FC<DetailOverlayProps> = ({ stock, onClose, on
     const yieldGrowth = stock.yoc - currentYield;
 
     const stats = [
+        {
+            label: "保有株数",
+            value: `${stock.shares.toLocaleString()}株`,
+            icon: <Layers size={14} />,
+            tooltip: "現在保有している株式の総数"
+        },
         {
             label: "増配回数",
             value: `${increaseCount}回`,
