@@ -142,7 +142,7 @@ export const StatsView: React.FC<StatsViewProps> = ({ stocks }) => {
                                         dataKey="value"
                                         stroke="none"
                                     >
-                                        {sectorData.map((entry, index) => (
+                                        {sectorData.map((_entry, index) => (
                                             <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                                         ))}
                                     </Pie>
@@ -154,7 +154,7 @@ export const StatsView: React.FC<StatsViewProps> = ({ stocks }) => {
                                     <Legend
                                         verticalAlign="bottom"
                                         height={36}
-                                        formatter={(value, entry: any) => <span className="text-white/70 ml-1">{value}</span>}
+                                        formatter={(value, _entry: any) => <span className="text-white/70 ml-1">{value}</span>}
                                     />
                                 </PieChart>
                             </ResponsiveContainer>
